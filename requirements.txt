@@ -1,1 +1,33 @@
+fastapi
+uvicorn
+motor
+pydantic
+python-multipart
+starlette
+transformers
+torch
+numpy
+redis
+python-dotenv
+httpx
+Pillow
+python-jose
+passlib
+bcrypt
+pydub
 
+# Caching
+redis
+
+# Utilities
+python-dotenv
+python-jose
+bcrypt
+passlib
+validators
+
+# For local development
+pytest
+pytest-asyncio
+black
+isort
