@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from api.dependencies import get_database
+from app.api.dependencies import get_database
 from typing import List, Optional
 import httpx
 
@@ -28,14 +28,14 @@ async def detect_language(
     """Detect the language of the provided text"""
     # This would call LibreTranslate or similar free service
     # For now, return a placeholder response
-    
+
     # Log the request
     await db.language_requests.insert_one({
         "operation": "detect",
         "text": request.text,
         "result": "hindi"  # Placeholder
     })
-    
+
     return {"detected_language": "hindi", "confidence": 0.95}
 
 @router.post("/translate")
@@ -46,9 +46,9 @@ async def translate_text(
     """Translate text between languages"""
     # This would call LibreTranslate or similar free service
     # For now, return a placeholder response
-    
+
     translated_text = f"Translated: {request.text}"
-    
+
     # Log the request
     await db.language_requests.insert_one({
         "operation": "translate",
@@ -57,7 +57,7 @@ async def translate_text(
         "target_language": request.target_language,
         "translated_text": translated_text
     })
-    
+
     return {
         "translated_text": translated_text,
         "source_language": request.source_language or "auto-detected",

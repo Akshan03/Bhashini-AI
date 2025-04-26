@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from api.dependencies import get_database
+from app.api.dependencies import get_database
 from app.services.session import session_manager
 from datetime import datetime
 

@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from api.dependencies import get_database
-from datetime import datetime
+from app.api.dependencies import get_database
+from app.services.llm.client import llm_client
+from datetime import datetime, timezone
 import uuid
 
 router = APIRouter()
@@ -32,7 +33,7 @@ async def process_chat(
     # Create new session if not provided
     if not session_id:
         session_id = str(uuid.uuid4())
-    
+
     # Save the incoming message
     message_data = {
         "session_id": session_id,
@@ -41,35 +42,45 @@ async def process_chat(
         "output_language": chat_request.output_language,
         "input_type": chat_request.input_type,
         "output_type": chat_request.output_type,
-        "timestamp": datetime.utcnow(),
+        "timestamp": datetime.now(timezone.utc),
         "direction": "incoming"
     }
-    
+
     await db.messages.insert_one(message_data)
-    
-    # Placeholder for actual processing
-    # This would involve language detection, LLM processing, etc.
+
+    # Generate response using Groq LLM
+    system_prompt = f"""You are a helpful, multilingual assistant for users in rural India.
+    Respond in the {chat_request.output_language} language when requested.
+    Be respectful, clear, and concise in your responses.
+    Provide practical information that is relevant to rural Indian contexts."""
+
+    llm_result = await llm_client.generate_response(
+        prompt=chat_request.message,
+        system_prompt=system_prompt,
+        language=chat_request.output_language
+    )
+
     response = {
         "session_id": session_id,
-        "response": f"This is a placeholder response for: {chat_request.message}",
+        "response": llm_result["text"],
         "response_type": chat_request.output_type,
-        "detected_language": chat_request.input_language or "hindi",
+        "detected_language": chat_request.input_language or "en",
         "media_url": None
     }
-    
+
     # Save the outgoing message
     response_data = {
         "session_id": session_id,
         "message": response["response"],
         "language": chat_request.output_language,
         "type": chat_request.output_type,
-        "timestamp": datetime.utcnow(),
+        "timestamp": datetime.now(timezone.utc),
         "direction": "outgoing"
     }
-    
+
     # Use background task to save the response
     background_tasks.add_task(save_response, db, response_data)
-    
+
     return response
 
 async def save_response(db, response_data):
@@ -84,9 +95,9 @@ async def get_chat_history(
     """Retrieve chat history for a given session"""
     cursor = db.messages.find({"session_id": session_id}).sort("timestamp", 1)
     messages = await cursor.to_list(length=100)
-    
+
     # Convert ObjectId to string for JSON serialization
     for message in messages:
         message["_id"] = str(message["_id"])
-    
+
     return messages

@@ -1,12 +1,13 @@
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from fastapi import Depends
 from typing import AsyncGenerator
+from app.core.config import settings
 
-MONGO_DETAILS = "mongodb://localhost:27017"  # MongoDB connection string
-client = AsyncIOMotorClient(MONGO_DETAILS)
-database = client.chatbot_db
+# Create a MongoDB client using settings
+client = AsyncIOMotorClient(settings.MONGO_DETAILS)
+database = client[settings.DATABASE_NAME]
 
-async def get_database() -> AsyncGenerator:
+async def get_database() -> AsyncGenerator[AsyncIOMotorDatabase, None]:
     try:
         yield database
     finally:

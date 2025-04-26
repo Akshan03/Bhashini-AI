@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Depends, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from api.dependencies import get_database
+from app.api.dependencies import get_database
 from pydantic import BaseModel
 from typing import Optional
 import io

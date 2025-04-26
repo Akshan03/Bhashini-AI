@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import json
+import urllib.parse
 from typing import Dict, Any, Optional, Tuple, Union
 from PIL import Image
 import tempfile
@@ -12,56 +13,104 @@ logger = logging.getLogger(__name__)
 
 class ImageGenerator:
     """
-    Service for generating images from text prompts using free APIs
-    Uses Restackio or similar free text-to-image services
+    Service for generating images from text prompts using Pollinations.ai
+    No API key required - completely free and open-source
     """
-    def __init__(self, api_key: Optional[str] = None):
-        # We'll default to using Restackio's API, but we can use others if needed
-        self.api_key = api_key or os.environ.get("RESTACKIO_API_KEY", "")
-        self.api_url = "https://api.restack.io/v1/vision/text-to-image"
+    def __init__(self):
+        # Base URL for Pollinations.ai
+        self.base_url = "https://image.pollinations.ai/prompt"
 
-        # Fallback to using HuggingFace inference endpoints if API key not available
-        self.hf_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+        # Set a custom user agent to be a good API citizen
+        self.user_agent = "MultiliingualChatbot/1.0"
+
+        # Default parameters
+        self.default_width = 512
+        self.default_height = 512
+
+        # Fallback services if needed
+        self.restackio_api_key = os.environ.get("RESTACKIO_API_KEY", "")
+        self.restackio_api_url = "https://api.restack.io/v1/vision/text-to-image"
+
         self.hf_api_key = os.environ.get("HUGGINGFACE_API_KEY", "")
+        self.hf_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
 
     async def generate_image(
         self,
         prompt: str,
         width: int = 512,
         height: int = 512,
-        guidance_scale: float = 7.5,
-        num_inference_steps: int = 50,
         negative_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Generate an image based on a text prompt
+        Generate an image based on a text prompt using Pollinations.ai
 
         Args:
             prompt: Text description of the image to generate
-            width: Desired image width (must be multiple of 32)
-            height: Desired image height (must be multiple of 32)
-            guidance_scale: How closely to follow the prompt (higher = more faithful)
-            num_inference_steps: Number of denoising steps (higher = better quality but slower)
-            negative_prompt: Things to avoid in the image
+            width: Desired image width
+            height: Desired image height
+            negative_prompt: Things to avoid in the image (unused in Pollinations.ai but kept for API compatibility)
 
         Returns:
             Dictionary containing image data or URL
         """
-        # Ensure dimensions are valid (multiples of 32)
-        width = (width // 32) * 32
-        height = (height // 32) * 32
+        try:
+            # URL encode the prompt
+            encoded_prompt = urllib.parse.quote(prompt)
 
-        # Try primary service
-        if self.api_key:
+            # Create the full URL with parameters
+            # Pollinations.ai format: https://image.pollinations.ai/prompt/{prompt}?width={width}&height={height}
+            image_url = f"{self.base_url}/{encoded_prompt}?width={width}&height={height}"
+
+            # Fetch the image
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    image_url,
+                    headers={"User-Agent": self.user_agent}
+                )
+
+                if response.status_code == 200:
+                    # Successfully retrieved the image
+                    image_bytes = response.content
+
+                    # Convert to base64 for consistent API response
+                    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+
+                    return {
+                        "success": True,
+                        "image_data": base64_image,
+                        "image_url": image_url,  # Also provide direct URL
+                        "format": "base64",
+                        "service": "pollinations.ai"
+                    }
+                else:
+                    logger.error(f"Pollinations.ai error: {response.status_code} - {response.text}")
+                    # Try fallback services
+                    return await self._try_fallback_services(prompt, width, height, negative_prompt)
+
+        except Exception as e:
+            logger.error(f"Error generating image with Pollinations.ai: {str(e)}")
+            # Try fallback services
+            return await self._try_fallback_services(prompt, width, height, negative_prompt)
+
+    async def _try_fallback_services(
+        self,
+        prompt: str,
+        width: int,
+        height: int,
+        negative_prompt: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Try fallback services when Pollinations.ai fails"""
+        # Try Restackio as first fallback
+        if self.restackio_api_key:
             try:
                 return await self._generate_with_restackio(
-                    prompt, width, height, guidance_scale, num_inference_steps, negative_prompt
+                    prompt, width, height, negative_prompt
                 )
             except Exception as e:
                 logger.error(f"Error generating image with Restackio: {str(e)}")
-                # Fall through to backup method
+                # Fall through to next fallback
 
-        # Try HuggingFace as backup
+        # Try HuggingFace as second fallback
         if self.hf_api_key:
             try:
                 return await self._generate_with_huggingface(
@@ -78,17 +127,19 @@ class ImageGenerator:
         prompt: str,
         width: int,
         height: int,
-        guidance_scale: float,
-        num_inference_steps: int,
-        negative_prompt: Optional[str]
+        negative_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """Use Restackio API to generate an image"""
+        # Ensure dimensions are valid (multiples of 32)
+        width = (width // 32) * 32
+        height = (height // 32) * 32
+
         payload = {
             "prompt": prompt,
             "width": width,
             "height": height,
-            "guidance_scale": guidance_scale,
-            "num_inference_steps": num_inference_steps
+            "guidance_scale": 7.5,
+            "num_inference_steps": 50
         }
 
         if negative_prompt:
@@ -96,12 +147,12 @@ class ImageGenerator:
 
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
+            "Authorization": f"Bearer {self.restackio_api_key}"
         }
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
-                self.api_url,
+                self.restackio_api_url,
                 json=payload,
                 headers=headers
             )
@@ -111,7 +162,8 @@ class ImageGenerator:
                 return {
                     "success": True,
                     "image_data": result.get("image_base64"),
-                    "format": "base64"
+                    "format": "base64",
+                    "service": "restackio"
                 }
             else:
                 logger.error(f"Restackio API error: {response.status_code} - {response.text}")
@@ -122,9 +174,13 @@ class ImageGenerator:
         prompt: str,
         width: int,
         height: int,
-        negative_prompt: Optional[str]
+        negative_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """Use HuggingFace API to generate an image"""
+        # Ensure dimensions are valid (multiples of 8)
+        width = (width // 8) * 8
+        height = (height // 8) * 8
+
         payload = {
             "inputs": prompt,
             "parameters": {
@@ -153,7 +209,8 @@ class ImageGenerator:
                 return {
                     "success": True,
                     "image_data": base64_image,
-                    "format": "base64"
+                    "format": "base64",
+                    "service": "huggingface"
                 }
             else:
                 logger.error(f"HuggingFace API error: {response.status_code} - {response.text}")
@@ -165,7 +222,7 @@ class ImageGenerator:
         width: int,
         height: int
     ) -> Dict[str, Any]:
-        """Generate a simple placeholder image with prompt text when all APIs fail"""
+        """Generate a simple placeholder image with prompt text when API fails"""
         try:
             # Create a simple image with text
             from PIL import Image, ImageDraw, ImageFont
@@ -212,25 +269,23 @@ class ImageGenerator:
             if current_line:
                 lines.append(current_line)
 
-            # Draw each line of the prompt
-            y_position = height // 2
-            for line in lines:
+            # Draw each line of the wrapped prompt
+            for i, line in enumerate(lines):
+                y_position = height//2 + i * (font_size + 5)
                 draw.text((width//2, y_position), line, fill=(0, 0, 0), font=font, anchor="mm")
-                y_position += font_size + 5
 
             # Save to a bytes buffer
             buffer = io.BytesIO()
             image.save(buffer, format="PNG")
-            buffer.seek(0)
-
-            # Convert to base64
-            base64_image = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            image_bytes = buffer.getvalue()
+            base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
             return {
                 "success": True,
                 "image_data": base64_image,
                 "format": "base64",
-                "is_placeholder": True
+                "is_placeholder": True,
+                "service": "placeholder"
             }
 
         except Exception as e:

@@ -10,12 +10,17 @@ logger = logging.getLogger(__name__)
 
 class SpeechToTextService:
     """
-    Service for converting speech to text using free/open-source APIs
-    Primary: WhisperAPI (free tier)
-    Fallback: Local Whisper model via Hugging Face
+    Service for converting speech to text using Bhashini ASR
+    With fallbacks to WhisperAPI and Hugging Face
     """
     def __init__(self):
-        # API keys and endpoints
+        # Bhashini credentials
+        self.user_id = os.environ.get("BHASHINI_USER_ID", "")
+        self.ulca_api_key = os.environ.get("BHASHINI_ULCA_API_KEY", "")
+        self.base_url = os.environ.get("BHASHINI_BASE_URL", "https://meity-auth.ulcacontrib.org/ulca/apis/v0/model/")
+        self.asr_pipeline_id = os.environ.get("BHASHINI_ASR_PIPELINE_ID", "")  # Default ASR pipeline
+
+        # Fallback services
         self.whisper_api_key = os.environ.get("WHISPER_API_KEY", "")
         self.whisper_api_url = "https://whisperapi.com/v1/transcribe"
 
@@ -67,7 +72,15 @@ class SpeechToTextService:
         # Ensure we have audio data as bytes
         audio_bytes = await self._get_audio_bytes(audio_data)
 
-        # Try primary service first
+        # Try Bhashini first if credentials are available
+        if self.user_id and self.ulca_api_key:
+            try:
+                return await self._transcribe_with_bhashini(audio_bytes, lang_code or "hi")
+            except Exception as e:
+                logger.error(f"Error with Bhashini ASR: {str(e)}")
+                # Fall through to next method
+
+        # Try WhisperAPI as first fallback
         if self.whisper_api_key:
             try:
                 return await self._transcribe_with_whisperapi(audio_bytes, lang_code)
@@ -75,7 +88,7 @@ class SpeechToTextService:
                 logger.error(f"Error with WhisperAPI: {str(e)}")
                 # Fall through to next method
 
-        # Try Hugging Face as fallback
+        # Try Hugging Face as second fallback
         if self.hf_api_key:
             try:
                 return await self._transcribe_with_huggingface(audio_bytes, lang_code)
@@ -85,6 +98,119 @@ class SpeechToTextService:
 
         # Local fallback using a simple pattern matching approach
         return self._fallback_transcription(audio_bytes, lang_code)
+
+    async def _transcribe_with_bhashini(
+        self,
+        audio_bytes: bytes,
+        language: str
+    ) -> Dict[str, Any]:
+        """Transcribe audio using Bhashini ASR"""
+        # Convert audio to base64
+        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+
+        # Get ASR pipeline ID if not already set
+        if not self.asr_pipeline_id:
+            self.asr_pipeline_id = await self._get_asr_pipeline_id(language)
+            if not self.asr_pipeline_id:
+                raise Exception(f"No ASR pipeline found for language {language}")
+
+        # Prepare payload for ASR
+        payload = {
+            "pipelineTasks": [
+                {
+                    "taskType": "asr",
+                    "config": {
+                        "language": {
+                            "sourceLanguage": language
+                        }
+                    }
+                }
+            ],
+            "inputData": {
+                "audio": [
+                    {
+                        "audioContent": audio_base64
+                    }
+                ]
+            }
+        }
+
+        headers = {
+            "userID": self.user_id,
+            "ulcaApiKey": self.ulca_api_key,
+            "Content-Type": "application/json"
+        }
+
+        if self.asr_pipeline_id:
+            headers["pipelineId"] = self.asr_pipeline_id
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{self.base_url}compute",
+                    json=payload,
+                    headers=headers
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    # Extract transcription from response
+                    transcription = result.get("pipelineResponse", [])[0].get("output", [])[0].get("source", "")
+                    return {
+                        "transcription": transcription,
+                        "detected_language": language,
+                        "confidence": 0.9,  # Bhashini doesn't provide confidence scores
+                        "service": "bhashini"
+                    }
+                else:
+                    logger.error(f"Bhashini ASR failed: {response.text}")
+                    raise Exception(f"Bhashini ASR failed: {response.status_code}")
+
+        except Exception as e:
+            logger.error(f"Error in Bhashini ASR: {str(e)}")
+            raise
+
+    async def _get_asr_pipeline_id(self, language: str) -> Optional[str]:
+        """Get the appropriate ASR pipeline ID for a language"""
+        # Prepare search API payload
+        payload = {
+            "task": {
+                "type": "asr"
+            },
+            "languages": {
+                "sourceLanguage": language
+            }
+        }
+
+        headers = {
+            "userID": self.user_id,
+            "ulcaApiKey": self.ulca_api_key,
+            "Content-Type": "application/json"
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self.base_url}search",
+                    json=payload,
+                    headers=headers
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    pipelines = result.get("pipelines", [])
+                    if pipelines:
+                        # Return the first pipeline ID
+                        return pipelines[0].get("pipelineId")
+                    else:
+                        logger.warning(f"No ASR pipeline found for {language}")
+                else:
+                    logger.error(f"Failed to get ASR pipeline ID: {response.text}")
+
+        except Exception as e:
+            logger.error(f"Error getting ASR pipeline ID: {str(e)}")
+
+        return None
 
     async def _transcribe_with_whisperapi(
         self,

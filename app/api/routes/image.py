@@ -1,13 +1,11 @@
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from api.dependencies import get_database
+from app.api.dependencies import get_database
 from pydantic import BaseModel
 from app.services.image import image_generator, image_analyzer
-import io
-import httpx
 import base64
-from typing import Optional, List, Dict, Any
+from typing import Optional
 
 router = APIRouter()
 
@@ -16,8 +14,6 @@ class ImageGenerationRequest(BaseModel):
     width: Optional[int] = 512
     height: Optional[int] = 512
     negative_prompt: Optional[str] = None
-    guidance_scale: Optional[float] = 7.5
-    num_inference_steps: Optional[int] = 50
     language: Optional[str] = "en"  # Language of the prompt
 
 class ImageAnalysisResponse(BaseModel):
@@ -36,25 +32,22 @@ async def generate_image(
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
     """Generate an image based on a text prompt"""
-    # Use our image generation service
-    result = await image_generator.generate_image(
-        prompt=request.prompt,
-        width=request.width,
-        height=request.height,
-        guidance_scale=request.guidance_scale,
-        num_inference_steps=request.num_inference_steps,
-        negative_prompt=request.negative_prompt
-    )
-
     # Log the request
     await db.image_requests.insert_one({
         "operation": "generate",
         "prompt": request.prompt,
         "width": request.width,
         "height": request.height,
-        "language": request.language,
-        "success": result.get("success", False)
+        "language": request.language
     })
+
+    # Generate image using Pollinations.ai
+    result = await image_generator.generate_image(
+        prompt=request.prompt,
+        width=request.width,
+        height=request.height,
+        negative_prompt=request.negative_prompt
+    )
 
     if not result.get("success", False):
         return JSONResponse(
@@ -62,12 +55,14 @@ async def generate_image(
             content={"error": "Failed to generate image", "details": result.get("message", "")}
         )
 
-    # Return the image data
+    # For Pollinations.ai, we can also return a direct URL
     return {
-        "success": True,
+        "success": result.get("success", False),
+        "image_url": result.get("image_url", ""),
         "image_data": result.get("image_data", ""),
         "format": result.get("format", "base64"),
         "is_placeholder": result.get("is_placeholder", False),
+        "service": result.get("service", ""),
         "prompt": request.prompt
     }
 

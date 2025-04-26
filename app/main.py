@@ -2,10 +2,10 @@ import logging
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-from api.middleware import LoggingMiddleware
-from api.dependencies import get_database
-from api.routes import chat, language, speech, image, session
-from core.config import settings
+from app.api.middleware import LoggingMiddleware
+from app.api.dependencies import get_database
+from app.api.routes import chat, language, speech, image, session
+from app.core.config import settings
 import os
 
 # Configure logging
